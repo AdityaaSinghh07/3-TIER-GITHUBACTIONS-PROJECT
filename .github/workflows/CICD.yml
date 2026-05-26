@@ -1,0 +1,114 @@
+name: NodeJS CI CD
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  compile:
+    runs-on: Agent-1
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Use Node.js 
+      uses: actions/setup-node@v4
+      with:
+        node-version: '23'
+
+    - name: Frontend Compilation (Syntax check)
+      run: |
+        cd client
+        find . -name "*.js" -exec node --check{} *
+
+    - name: Backend Compilation (Syntax check)
+      run: |
+        cd api
+        find . -name "*.js" -exec node --check{} *
+
+
+  gitleaks-scan:
+    runs-on: Agent-1
+    needs: compile 
+    # Here Githubactions will understand that gitleaks will only run once the copile job is done. They won't run together.
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Gitleaks Setup 
+      uses: gitleaks/gitleaks-action@v2
+      
+
+    - name: Gitleaks Scan
+      run: |
+        gitleaks detect --source ./client --exit-code 1
+        gitleaks detect --source ./api --exit-code 1
+
+
+  trivy_fs_scan:
+    runs-on: Agent-1
+    needs: gitleaks-scan 
+    #Here Githubactions will understand that trivy will only run once the gitleaks scan job is done. They won't run together.
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Run Trivy vulnerability scanner 
+      uses: aquasecurity/trivy-action@v0.36.0
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        trivy-config: trivy.yaml
+        ignore-unfixed: true
+        vuln-type: 'os,library'
+        severity: 'CRITICAL,HIGH'
+
+
+  sonar-frontend:
+    runs-on: Agent 1
+    needs: trivy_fs_scan
+    steps:
+    - name: Checkout Code 
+      uses: actions/checkout@master
+      
+    - name: SonarQube Scan (client)
+      uses: sonarsource/sonarqube-scan-action@master
+      with:
+        projectBaseDir: client
+        args: >
+          -Dsonar.projectKey=myorg_client
+          -Dsonar.projectName=myorg_client
+          -Dsonar.sources=.
+          -Dsonar.exclusions=**/node_modules/**,**/dist/**,**/build/**
+         env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+
+  sonar-backend:
+    runs-on: Agent 1
+    needs: sonar-frontend
+    steps:
+    - name: Checkout Code 
+      uses: actions/checkout@master
+      
+    - name: SonarQube Scan(api)
+      uses: sonarsource/sonarqube-scan-action@master
+      with:
+        projectBaseDir: api
+        args: >
+          -Dsonar.projectKey=myorg_api
+          -Dsonar.projectName=myorg_api
+          -Dsonar.sources=.
+          -Dsonar.exclusions=**/node_modules/**,**/dist/**,**/build/**
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL}}
+
+
+  
